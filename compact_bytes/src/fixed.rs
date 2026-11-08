@@ -183,10 +183,7 @@ impl CompactBytesSlice {
 
             boxed
         } else {
-            // SAFETY: `InlineBytes15` and `HeapBytesFixed` have the same size and alignment.
-            // Above we checked if the current `CompactBytesSlice` is heap allocated.
-            let inline = unsafe { &self.inline };
-            inline.buffer.into()
+            self.as_slice().into()
         }
     }
 
