@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::ptr::NonNull;
 
-use crate::{HeapBytesGrowable, InlineBytes23, INLINE_MASK};
+use crate::{HeapBytesGrowable, INLINE_MASK, InlineBytes23};
 
 /// [`CompactBytes`] inlines up-to 23 bytes on the stack, if more than that is required we spill to
 /// the heap. The heap representation is not reference counted like `bytes::Bytes`, it's just an
@@ -150,7 +150,8 @@ impl CompactBytes {
     #[inline]
     pub unsafe fn from_raw_parts(ptr: *mut u8, length: usize, capacity: usize) -> Self {
         let heap = HeapBytesGrowable {
-            ptr: NonNull::new_unchecked(ptr),
+            // SAFETY: The caller guarantees `ptr` comes from a live allocation, so it's non-null.
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
             len: length,
             cap: capacity,
         };
@@ -361,10 +362,14 @@ impl CompactBytes {
     ///
     #[inline]
     unsafe fn set_len(&mut self, new_len: usize) {
-        if self.spilled() {
-            self.heap.set_len(new_len);
-        } else {
-            self.inline.set_len(new_len);
+        // SAFETY: `spilled()` selects the active union variant; the caller upholds `set_len`'s
+        // preconditions.
+        unsafe {
+            if self.spilled() {
+                self.heap.set_len(new_len);
+            } else {
+                self.inline.set_len(new_len);
+            }
         }
     }
 

@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::ptr::NonNull;
 
-use crate::{HeapBytesFixed, InlineBytes15, INLINE_MASK};
+use crate::{HeapBytesFixed, INLINE_MASK, InlineBytes15};
 
 /// [`CompactBytesSlice`] inlines up-to 15 bytes on the stack, if more than that is required we
 /// spill to the heap. The heap representation is not reference counted like `bytes::Bytes`.
@@ -104,7 +104,8 @@ impl CompactBytesSlice {
     #[inline]
     pub unsafe fn from_raw_parts(ptr: *mut u8, length: usize) -> Self {
         let heap = HeapBytesFixed {
-            ptr: NonNull::new_unchecked(ptr),
+            // SAFETY: The caller guarantees `ptr` comes from a live allocation, so it's non-null.
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
             len: length,
         };
         let heap = ManuallyDrop::new(heap);
