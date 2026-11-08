@@ -49,16 +49,17 @@ unsafe impl Send for CompactBytes {}
 // support any kind of interior mutability, or other way to introduce races.
 unsafe impl Sync for CompactBytes {}
 
-static_assertions::assert_eq_align!(
-    InlineBytes23,
-    HeapBytesGrowable,
-    CompactBytes,
-    Vec<u8>,
-    usize
-);
-static_assertions::assert_eq_size!(InlineBytes23, HeapBytesGrowable, CompactBytes, Vec<u8>);
+const _: () = {
+    assert!(align_of::<InlineBytes23>() == align_of::<usize>());
+    assert!(align_of::<HeapBytesGrowable>() == align_of::<usize>());
+    assert!(align_of::<CompactBytes>() == align_of::<usize>());
+    assert!(align_of::<Vec<u8>>() == align_of::<usize>());
 
-static_assertions::const_assert_eq!(std::mem::size_of::<CompactBytes>(), 24);
+    assert!(size_of::<InlineBytes23>() == size_of::<Vec<u8>>());
+    assert!(size_of::<HeapBytesGrowable>() == size_of::<Vec<u8>>());
+    assert!(size_of::<CompactBytes>() == size_of::<Vec<u8>>());
+    assert!(size_of::<CompactBytes>() == 24);
+};
 
 impl CompactBytes {
     /// The maximum amount of bytes that a [`CompactBytes`] can store inline.

@@ -16,7 +16,6 @@ categories = ["encoding", "parsing", "memory-management", "text-processing"]
 
 [dependencies]
 serde = "1"
-static_assertions = "1"
 
 [dev-dependencies]
 bitcode = { version = "0.6.0", features = ["serde"] }

@@ -16,15 +16,17 @@ pub union CompactBytesSlice {
     inline: InlineBytes15,
 }
 
-static_assertions::assert_eq_align!(
-    InlineBytes15,
-    HeapBytesFixed,
-    CompactBytesSlice,
-    Box<[u8]>,
-    usize
-);
-static_assertions::assert_eq_size!(InlineBytes15, HeapBytesFixed, CompactBytesSlice, Box<[u8]>);
-static_assertions::const_assert_eq!(std::mem::size_of::<CompactBytesSlice>(), 16);
+const _: () = {
+    assert!(align_of::<InlineBytes15>() == align_of::<usize>());
+    assert!(align_of::<HeapBytesFixed>() == align_of::<usize>());
+    assert!(align_of::<CompactBytesSlice>() == align_of::<usize>());
+    assert!(align_of::<Box<[u8]>>() == align_of::<usize>());
+
+    assert!(size_of::<InlineBytes15>() == size_of::<Box<[u8]>>());
+    assert!(size_of::<HeapBytesFixed>() == size_of::<Box<[u8]>>());
+    assert!(size_of::<CompactBytesSlice>() == size_of::<Box<[u8]>>());
+    assert!(size_of::<CompactBytesSlice>() == 16);
+};
 
 // SAFETY: It is safe to Send a `CompactBytesSlice` to other threads because it
 // owns all of its data.
