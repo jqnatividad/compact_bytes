@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::ManuallyDrop;
@@ -263,6 +264,20 @@ impl<T: AsRef<[u8]>> PartialEq<T> for CompactBytesSlice {
 
 impl Eq for CompactBytesSlice {}
 
+impl PartialOrd for CompactBytesSlice {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompactBytesSlice {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
 impl Hash for CompactBytesSlice {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_slice().hash(state)
@@ -333,11 +348,27 @@ impl From<Box<[u8]>> for CompactBytesSlice {
     }
 }
 
+impl From<&[u8]> for CompactBytesSlice {
+    #[inline]
+    fn from(value: &[u8]) -> Self {
+        CompactBytesSlice::new(value)
+    }
+}
+
+impl Borrow<[u8]> for CompactBytesSlice {
+    #[inline]
+    fn borrow(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use proptest::prelude::*;
     use test_case::test_case;
     use test_strategy::proptest;
+
+    use std::borrow::Borrow;
 
     use super::{CompactBytesSlice, HeapBytesFixed};
 
@@ -468,5 +499,87 @@ mod test {
         assert_eq!(repr.spilled(), !control.is_empty());
         // The allocation of the Vec should get re-used.
         assert_eq!(repr.as_ptr() == pointer, !control.is_empty());
+    }
+
+    fn hash_of<T: std::hash::Hash + ?Sized>(value: &T) -> u64 {
+        use std::hash::BuildHasher;
+        std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default().hash_one(value)
+    }
+
+    // Plain test cases (not proptests) so these run under miri.
+    #[test_case(0 ; "empty")]
+    #[test_case(CompactBytesSlice::MAX_INLINE - 1 ; "below_max_inline")]
+    #[test_case(CompactBytesSlice::MAX_INLINE ; "max_inline")]
+    #[test_case(CompactBytesSlice::MAX_INLINE + 1 ; "first_spill")]
+    fn boundary_lifecycle(len: usize) {
+        let control: Vec<u8> = (0..len).map(|i| i as u8).collect();
+        let spills = len > CompactBytesSlice::MAX_INLINE;
+
+        let repr = CompactBytesSlice::new(&control);
+        assert_eq!(repr.as_slice(), control.as_slice());
+        assert_eq!(repr.len(), len);
+        assert_eq!(repr.spilled(), spills);
+
+        let clone = repr.clone();
+        assert_eq!(clone.as_slice(), control.as_slice());
+        assert_eq!(clone.spilled(), spills);
+        drop(clone);
+
+        let from_slice = CompactBytesSlice::from(control.as_slice());
+        assert_eq!(from_slice, repr);
+        assert_eq!(from_slice.spilled(), spills);
+        drop(from_slice);
+
+        assert_eq!(&*repr.into_boxed_slice(), control.as_slice());
+
+        let from_box = CompactBytesSlice::from(control.clone().into_boxed_slice());
+        assert_eq!(from_box.as_slice(), control.as_slice());
+        let from_box_clone = from_box.clone();
+        assert_eq!(from_box_clone.spilled(), spills);
+        assert_eq!(from_box_clone.as_slice(), control.as_slice());
+        assert_eq!(&*from_box.into_boxed_slice(), control.as_slice());
+    }
+
+    #[test]
+    fn boundary_ord_and_hash() {
+        let inline = CompactBytesSlice::new(&[1; CompactBytesSlice::MAX_INLINE]);
+        let heap = CompactBytesSlice::new(&[1; CompactBytesSlice::MAX_INLINE + 1]);
+        assert!(!inline.spilled());
+        assert!(heap.spilled());
+
+        // A strict prefix sorts first, regardless of representation.
+        assert!(inline < heap);
+        assert_eq!(heap.cmp(&inline), std::cmp::Ordering::Greater);
+        assert_eq!(inline.cmp(&inline.clone()), std::cmp::Ordering::Equal);
+
+        for repr in [&inline, &heap] {
+            let slice: &[u8] = repr.borrow();
+            assert_eq!(slice, repr.as_slice());
+            assert_eq!(hash_of(repr), hash_of(slice));
+        }
+
+        let map: std::collections::HashMap<CompactBytesSlice, u32> =
+            [(inline.clone(), 1), (heap.clone(), 2)]
+                .into_iter()
+                .collect();
+        assert_eq!(map.get(inline.as_slice()), Some(&1));
+        assert_eq!(map.get(heap.as_slice()), Some(&2));
+    }
+
+    #[proptest]
+    #[cfg_attr(miri, ignore)]
+    fn proptest_ord_matches_vec(a: Vec<u8>, b: Vec<u8>) {
+        let (ra, rb) = (CompactBytesSlice::new(&a), CompactBytesSlice::new(&b));
+        prop_assert_eq!(ra.cmp(&rb), a.cmp(&b));
+        prop_assert_eq!(ra.partial_cmp(&rb), a.partial_cmp(&b));
+    }
+
+    #[proptest]
+    #[cfg_attr(miri, ignore)]
+    fn proptest_borrow_hash_matches_slice(initial: Vec<u8>) {
+        let repr = CompactBytesSlice::from(initial.as_slice());
+        let borrowed: &[u8] = repr.borrow();
+        prop_assert_eq!(borrowed, initial.as_slice());
+        prop_assert_eq!(hash_of(&repr), hash_of(initial.as_slice()));
     }
 }
