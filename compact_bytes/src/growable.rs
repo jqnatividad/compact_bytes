@@ -530,18 +530,21 @@ impl From<Vec<u8>> for CompactBytes {
     }
 }
 
+#[cfg(feature = "serde")]
 impl serde::Serialize for CompactBytes {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.as_slice().serialize(serializer)
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for CompactBytes {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserialize_compact_bytes(deserializer)
     }
 }
 
+#[cfg(feature = "serde")]
 fn deserialize_compact_bytes<'de: 'a, 'a, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<CompactBytes, D::Error> {
@@ -591,6 +594,7 @@ mod test {
     use super::{CompactBytes, HeapBytesGrowable};
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_bitcode() {
         let obj = CompactBytes::new(b"hello world");
         let encoded = bitcode::serialize(&obj).unwrap();
@@ -853,6 +857,7 @@ mod test {
     }
 
     #[proptest]
+    #[cfg(feature = "serde")]
     #[cfg_attr(miri, ignore)]
     fn proptest_serde(initial: Vec<u8>) {
         let repr = CompactBytes::new(&initial);
