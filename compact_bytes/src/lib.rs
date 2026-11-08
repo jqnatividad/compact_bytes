@@ -21,11 +21,11 @@ struct InlineBytes<const CAPACITY: usize> {
 
 /// Inline storage for [`CompactBytes`].
 type InlineBytes23 = InlineBytes<23>;
-static_assertions::assert_eq_size!(InlineBytes23, Vec<u8>);
+const _: () = assert!(size_of::<InlineBytes23>() == size_of::<Vec<u8>>());
 
 /// Inline storage for [`CompactBytesSlice`].
 type InlineBytes15 = InlineBytes<15>;
-static_assertions::assert_eq_size!(InlineBytes15, Box<[u8]>);
+const _: () = assert!(size_of::<InlineBytes15>() == size_of::<Box<[u8]>>());
 
 impl<const CAPACITY: usize> InlineBytes<CAPACITY> {
     /// The amount of bytes this [`InlineBytes`] can store inline.
@@ -91,7 +91,7 @@ struct HeapBytesGrowable {
     len: usize,
     cap: usize,
 }
-static_assertions::assert_eq_size!(HeapBytesGrowable, Vec<u8>);
+const _: () = assert!(size_of::<HeapBytesGrowable>() == size_of::<Vec<u8>>());
 
 impl HeapBytesGrowable {
     /// The minimum allocation size for a [`HeapBytesGrowable`].
@@ -214,7 +214,7 @@ struct HeapBytesFixed {
     ptr: NonNull<u8>,
     len: usize,
 }
-static_assertions::assert_eq_size!(HeapBytesFixed, Box<[u8]>);
+const _: () = assert!(size_of::<HeapBytesFixed>() == size_of::<Box<[u8]>>());
 
 impl HeapBytesFixed {
     /// The maximum allocation size for a [`HeapBytesFixed`].

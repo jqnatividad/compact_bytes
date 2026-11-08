@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::ManuallyDrop;
@@ -5,7 +6,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::ptr::NonNull;
 
-use crate::{HeapBytesGrowable, InlineBytes23, INLINE_MASK};
+use crate::{HeapBytesGrowable, INLINE_MASK, InlineBytes23};
 
 /// [`CompactBytes`] inlines up-to 23 bytes on the stack, if more than that is required we spill to
 /// the heap. The heap representation is not reference counted like `bytes::Bytes`, it's just an
@@ -49,16 +50,17 @@ unsafe impl Send for CompactBytes {}
 // support any kind of interior mutability, or other way to introduce races.
 unsafe impl Sync for CompactBytes {}
 
-static_assertions::assert_eq_align!(
-    InlineBytes23,
-    HeapBytesGrowable,
-    CompactBytes,
-    Vec<u8>,
-    usize
-);
-static_assertions::assert_eq_size!(InlineBytes23, HeapBytesGrowable, CompactBytes, Vec<u8>);
+const _: () = {
+    assert!(align_of::<InlineBytes23>() == align_of::<usize>());
+    assert!(align_of::<HeapBytesGrowable>() == align_of::<usize>());
+    assert!(align_of::<CompactBytes>() == align_of::<usize>());
+    assert!(align_of::<Vec<u8>>() == align_of::<usize>());
 
-static_assertions::const_assert_eq!(std::mem::size_of::<CompactBytes>(), 24);
+    assert!(size_of::<InlineBytes23>() == size_of::<Vec<u8>>());
+    assert!(size_of::<HeapBytesGrowable>() == size_of::<Vec<u8>>());
+    assert!(size_of::<CompactBytes>() == size_of::<Vec<u8>>());
+    assert!(size_of::<CompactBytes>() == 24);
+};
 
 impl CompactBytes {
     /// The maximum amount of bytes that a [`CompactBytes`] can store inline.
@@ -150,7 +152,8 @@ impl CompactBytes {
     #[inline]
     pub unsafe fn from_raw_parts(ptr: *mut u8, length: usize, capacity: usize) -> Self {
         let heap = HeapBytesGrowable {
-            ptr: NonNull::new_unchecked(ptr),
+            // SAFETY: The caller guarantees `ptr` comes from a live allocation, so it's non-null.
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
             len: length,
             cap: capacity,
         };
@@ -361,10 +364,14 @@ impl CompactBytes {
     ///
     #[inline]
     unsafe fn set_len(&mut self, new_len: usize) {
-        if self.spilled() {
-            self.heap.set_len(new_len);
-        } else {
-            self.inline.set_len(new_len);
+        // SAFETY: `spilled()` selects the active union variant; the caller upholds `set_len`'s
+        // preconditions.
+        unsafe {
+            if self.spilled() {
+                self.heap.set_len(new_len);
+            } else {
+                self.inline.set_len(new_len);
+            }
         }
     }
 
@@ -447,6 +454,20 @@ impl<T: AsRef<[u8]>> PartialEq<T> for CompactBytes {
 
 impl Eq for CompactBytes {}
 
+impl PartialOrd for CompactBytes {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompactBytes {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
 impl Hash for CompactBytes {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_slice().hash(state)
@@ -524,18 +545,35 @@ impl From<Vec<u8>> for CompactBytes {
     }
 }
 
+impl From<&[u8]> for CompactBytes {
+    #[inline]
+    fn from(value: &[u8]) -> Self {
+        CompactBytes::new(value)
+    }
+}
+
+impl Borrow<[u8]> for CompactBytes {
+    #[inline]
+    fn borrow(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+#[cfg(feature = "serde")]
 impl serde::Serialize for CompactBytes {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.as_slice().serialize(serializer)
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for CompactBytes {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserialize_compact_bytes(deserializer)
     }
 }
 
+#[cfg(feature = "serde")]
 fn deserialize_compact_bytes<'de: 'a, 'a, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<CompactBytes, D::Error> {
@@ -582,9 +620,12 @@ mod test {
     use test_case::test_case;
     use test_strategy::proptest;
 
+    use std::borrow::Borrow;
+
     use super::{CompactBytes, HeapBytesGrowable};
 
     #[test]
+    #[cfg(feature = "serde")]
     fn test_bitcode() {
         let obj = CompactBytes::new(b"hello world");
         let encoded = bitcode::serialize(&obj).unwrap();
@@ -847,6 +888,7 @@ mod test {
     }
 
     #[proptest]
+    #[cfg(feature = "serde")]
     #[cfg_attr(miri, ignore)]
     fn proptest_serde(initial: Vec<u8>) {
         let repr = CompactBytes::new(&initial);
@@ -879,5 +921,119 @@ mod test {
     fn test_heap_bytes_capacity() {
         let heap = HeapBytesGrowable::with_capacity(1);
         drop(heap);
+    }
+
+    fn hash_of<T: std::hash::Hash + ?Sized>(value: &T) -> u64 {
+        use std::hash::BuildHasher;
+        std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default().hash_one(value)
+    }
+
+    // Plain test cases (not proptests) so these run under miri.
+    #[test_case(0 ; "empty")]
+    #[test_case(CompactBytes::MAX_INLINE - 1 ; "below_max_inline")]
+    #[test_case(CompactBytes::MAX_INLINE ; "max_inline")]
+    #[test_case(CompactBytes::MAX_INLINE + 1 ; "first_spill")]
+    fn boundary_lifecycle(len: usize) {
+        let control: Vec<u8> = (0..len).map(|i| i as u8).collect();
+        let spills = len > CompactBytes::MAX_INLINE;
+
+        let repr = CompactBytes::new(&control);
+        assert_eq!(repr.as_slice(), control.as_slice());
+        assert_eq!(repr.len(), len);
+        assert_eq!(repr.spilled(), spills);
+
+        let clone = repr.clone();
+        assert_eq!(clone.as_slice(), control.as_slice());
+        assert_eq!(clone.spilled(), spills);
+        drop(clone);
+
+        let from_slice = CompactBytes::from(control.as_slice());
+        assert_eq!(from_slice, repr);
+        assert_eq!(from_slice.spilled(), spills);
+        drop(from_slice);
+
+        assert_eq!(repr.into_vec(), control);
+
+        let from_vec = CompactBytes::from(control.clone());
+        assert_eq!(from_vec.as_slice(), control.as_slice());
+        let from_vec_clone = from_vec.clone();
+        assert_eq!(from_vec_clone.spilled(), spills);
+        assert_eq!(from_vec_clone.as_slice(), control.as_slice());
+        assert_eq!(from_vec.into_vec(), control);
+    }
+
+    #[test_case(CompactBytes::MAX_INLINE - 1 ; "below_max_inline")]
+    #[test_case(CompactBytes::MAX_INLINE ; "max_inline")]
+    #[test_case(CompactBytes::MAX_INLINE + 1 ; "first_spill")]
+    fn boundary_grow_and_shrink_across_spill(start: usize) {
+        let mut control = vec![7u8; start];
+        let mut repr = CompactBytes::new(&control);
+
+        for byte in 0..3u8 {
+            repr.push(byte);
+            control.push(byte);
+            assert_eq!(repr.as_slice(), control.as_slice());
+            assert_eq!(repr.spilled(), control.len() > CompactBytes::MAX_INLINE);
+        }
+
+        repr.extend_from_slice(&[9; 2]);
+        control.extend_from_slice(&[9; 2]);
+        assert_eq!(repr.as_slice(), control.as_slice());
+
+        // Shrinking below the boundary keeps the existing heap allocation.
+        repr.truncate(CompactBytes::MAX_INLINE - 1);
+        control.truncate(CompactBytes::MAX_INLINE - 1);
+        assert_eq!(repr.as_slice(), control.as_slice());
+        assert!(repr.spilled());
+
+        // But a clone of a short heap value is inlined again.
+        let clone = repr.clone();
+        assert!(!clone.spilled());
+        assert_eq!(clone.as_slice(), control.as_slice());
+
+        assert_eq!(repr.into_vec(), control);
+    }
+
+    #[test]
+    fn boundary_ord_and_hash() {
+        let inline = CompactBytes::new(&[1; CompactBytes::MAX_INLINE]);
+        let heap = CompactBytes::new(&[1; CompactBytes::MAX_INLINE + 1]);
+        assert!(!inline.spilled());
+        assert!(heap.spilled());
+
+        // A strict prefix sorts first, regardless of representation.
+        assert!(inline < heap);
+        assert_eq!(heap.cmp(&inline), std::cmp::Ordering::Greater);
+        assert_eq!(inline.cmp(&inline.clone()), std::cmp::Ordering::Equal);
+
+        for repr in [&inline, &heap] {
+            let slice: &[u8] = repr.borrow();
+            assert_eq!(slice, repr.as_slice());
+            assert_eq!(hash_of(repr), hash_of(slice));
+        }
+
+        let map: std::collections::HashMap<CompactBytes, u32> =
+            [(inline.clone(), 1), (heap.clone(), 2)]
+                .into_iter()
+                .collect();
+        assert_eq!(map.get(inline.as_slice()), Some(&1));
+        assert_eq!(map.get(heap.as_slice()), Some(&2));
+    }
+
+    #[proptest]
+    #[cfg_attr(miri, ignore)]
+    fn proptest_ord_matches_vec(a: Vec<u8>, b: Vec<u8>) {
+        let (ra, rb) = (CompactBytes::new(&a), CompactBytes::new(&b));
+        prop_assert_eq!(ra.cmp(&rb), a.cmp(&b));
+        prop_assert_eq!(ra.partial_cmp(&rb), a.partial_cmp(&b));
+    }
+
+    #[proptest]
+    #[cfg_attr(miri, ignore)]
+    fn proptest_borrow_hash_matches_slice(initial: Vec<u8>) {
+        let repr = CompactBytes::from(initial.as_slice());
+        let borrowed: &[u8] = repr.borrow();
+        prop_assert_eq!(borrowed, initial.as_slice());
+        prop_assert_eq!(hash_of(&repr), hash_of(initial.as_slice()));
     }
 }

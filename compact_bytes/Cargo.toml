@@ -2,9 +2,10 @@
 name = "compact_bytes"
 description = "A memory efficient bytes container that transparently stores bytes on the stack, when possible"
 version = "0.2.1"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 authors = ["Parker Timmerman <parker@parkertimmerman.com>"]
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 homepage = "https://github.com/ParkMyCar/compact_bytes"
 repository = "https://github.com/ParkMyCar/compact_bytes"
 readme = "../README.md"
@@ -14,8 +15,11 @@ categories = ["encoding", "parsing", "memory-management", "text-processing"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serde = "1"
-static_assertions = "1"
+serde = { version = "1", optional = true }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
 
 [dev-dependencies]
 bitcode = { version = "0.6.0", features = ["serde"] }
